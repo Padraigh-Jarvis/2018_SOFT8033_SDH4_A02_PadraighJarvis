@@ -13,13 +13,133 @@
 import time
 from pyspark.streaming import StreamingContext
 import json
+from __future__ import division
+
+
+
+# ------------------------------------------
+# FUNCTION my_parse
+# ------------------------------------------
+def my_parse(line):
+  #Take the cuisine, points and evaluation from the dictionary and put them into a tuple with another tuple in it
+  cuisine = line["cuisine"]
+  points = line["points"]
+  evaluation = line["evaluation"]
+  return (cuisine,(points,evaluation))
+  
+
+# ------------------------------------------
+# FUNCTION my_format
+# ------------------------------------------
+def my_format(cuisineData):
+  #Combine all the grouped cuisine reviews into 1 tuple that contains a summary of the reviews 
+  numOfReviews=0
+  numOfNegativeReviews=0
+  totalPoints=0
+  for data in cuisineData[1]:
+    review = data[1]
+    numOfReviews=numOfReviews+1
+    if review[1] == "Negative":
+      numOfNegativeReviews=numOfNegativeReviews+1
+      totalPoints=totalPoints-review[0]
+      continue 
+    else:
+      totalPoints=totalPoints+review[0]
+  return (cuisineData[0], (numOfReviews, numOfNegativeReviews, totalPoints))
+# ------------------------------------------
+# FUNCTION my_fake_key
+# ------------------------------------------
+def my_fake_key(line):
+  return ("fake",(line[0],line[1][0],line[1][1],line[1][2]))
+
+# ------------------------------------------
+# FUNCTION my_filter
+# ------------------------------------------
+def my_filter(line,percentage_f):
+  #Filter out any cuisines that have a number of reviews lower then the average and that has an amount of bad reviews above a given pesentage 
+  
+  totalReviews = line[1][3]
+  totalCuisines = line[1][4]
+  averageReviewPerCuisine=totalReviews/totalCuisines
+  reviewsForCusisine = line[1][0]
+  negativeReviewsForCusisine = line[1][1]
+  if reviewsForCusisine < averageReviewPerCuisine:
+    return False
+  elif ((negativeReviewsForCusisine*100)/reviewsForCusisine)>percentage_f:
+    return False
+  else:
+    return True
+# ------------------------------------------
+# FUNCTION my_quality
+# ------------------------------------------
+def my_quality(cuisine):
+  #Calculate the "quality" of a cuisine by deviding the amount of points it has over the amount of reviews it has 
+  quality = cuisine[1][2]/cuisine[1][0]
+  return (cuisine[0], (cuisine[1][0], cuisine[1][1], cuisine[1][2], quality ))
+
 
 
 # ------------------------------------------
 # FUNCTION my_model
 # ------------------------------------------
-def my_model(ssc, monitoring_dir, result_dir, percentage_f, window_duration, sliding_duration):
-    pass
+def my_model(ssc, monitoring_dir, result_dir, percentage_f, window_duration, sliding_duration, time_step_interval):
+  inputDStream = ssc.textFileStream(monitoring_dir)
+  #1. Create a window to read in the quartly files 
+  windowDStream = inputDStream.window(window_duration * time_step_interval, sliding_duration * time_step_interval)
+  windowDStream.cache()
+  #2. Read in the data from the files 
+  dictionaryStream = windowDStream.map(lambda x: json.loads(x))
+  
+  #3. Parse the files data into the informaton we need
+  parsedStream = dictionaryStream.map(my_parse)
+ 
+  #4. Group by cuisne key 
+  groupedStream = parsedStream.transform(lambda rdd: rdd.groupBy(lambda line: line[0]))
+
+  #5. Parse to get total number of reviews, total number of negative reviews and total number of points per cuisne
+  formattedStream = groupedStream.map(my_format)
+  #6. Cache the formattedStream to be used in more then 1 operations
+  formattedStream.cache()
+  
+  
+  #7. Calcualte the average number of reviews per cuisine. To get the total number of reviews and the total number of cuisines a lot of work must be done
+  #7.1 First we must make a Stream that is makde up of a tuple. Each tuple starts with the key "fake" and includes the values for that cuisine in it's value
+  fakeKeyStream = formattedStream.map(my_fake_key)
+  
+  #7.2.1 We then count the total numbers of reviews and the total number of cusines by calling count on inputDStream and formattedStream. 
+  #The reason why we could not do this normally is because when .count() is called on a stream it does not give back a single value, instead it is a stream.
+  totalReviewCountStream = windowDStream.count()
+  totalCuisineCountStream = formattedStream.count()
+  
+  #7.2.2 We then call a map on the counts to generate a tuple that has a key of "fake" and the valueing being the respective count value
+  totalReviewMapStream = totalReviewCountStream.map(lambda x: ("fake",x))
+  totalCuisineMapStream = totalCuisineCountStream.map(lambda x: ("fake",x))
+  
+  #7.2.3 We then proform a join on these two streams. As a result we will get a a tuple in the stream with the key "fake" and a tuple for the value that contains the total reviews and total cuisines 
+  joinedTotalStream = totalReviewMapStream.join(totalCuisineMapStream)
+  
+  #7.3 We then join the total cusine and reviews tuple with the tuple containing the data for each cuisine 
+  joinedCuisineDataTotalStream = joinedTotalStream.join(fakeKeyStream)
+  
+  
+  #7.4 We then format the tuples to suit our needs
+  formattedTotalStream = joinedCuisineDataTotalStream.map(lambda x: (x[1][1][0], (x[1][1][1], x[1][1][2], x[1][1][3], x[1][0][0], x[1][0][1])))
+  #formattedTotalStream.pprint()
+  #8. We then filter out any cuisine that does not match our filter parameters
+  filteredStream = formattedTotalStream.filter(lambda line: my_filter(line, percentage_f))
+  
+  #9. Sort the results by quality
+  #9.1 First we must add the quality metric to the data 
+  qualityAddedStream = filteredStream.map(my_quality)
+  
+  #9.2 Then we sort the stream by quality
+  sortedStream = qualityAddedStream.transform(lambda rdd: rdd.sortBy(lambda x: x[1][3],ascending=False))
+
+  sortedStream.cache()
+  sortedStream.saveAsTextFiles(result_dir)
+  sortedStream.pprint()
+  
+  pass
 
 # ------------------------------------------
 # FUNCTION create_ssc
@@ -54,7 +174,7 @@ def create_ssc(monitoring_dir,
     # This is the main function of the Spark application:
     # On it we specify what do we want the SparkStreaming context to do once it receives data
     # (i.e., the full set of transformations and ouptut operations we want it to perform).
-    my_model(ssc, monitoring_dir, result_dir, percentage_f, window_duration, sliding_duration)
+    my_model(ssc, monitoring_dir, result_dir, percentage_f, window_duration, sliding_duration, time_step_interval)
 
     # 4. We return the ssc configured and modelled.
     return ssc
@@ -192,7 +312,7 @@ if __name__ == '__main__':
     dataset_micro_batches = 16
 
     # 3. We specify the time interval each of our micro-batches (files) appear for its processing.
-    time_step_interval = 10
+    time_step_interval =20
 
     # 4. We specify the maximum amount of micro-batches that we want to allow before considering data
     # old and dumping it.

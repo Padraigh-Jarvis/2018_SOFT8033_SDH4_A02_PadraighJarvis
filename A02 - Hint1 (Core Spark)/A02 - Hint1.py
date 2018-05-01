@@ -71,7 +71,7 @@ def my_main(dataset_dir, result_dir, percentage_f):
   
   #2. Parse json line to python dictionary 
   rawDataRDD = inputRDD.map(lambda line: json.loads(line))
-  
+  rawDataRDD.persist()
   #3. Parse dataset to tuple that contains a key of cuisene and a value of review data 
   parsedRDD = rawDataRDD.map(my_parse)
   
@@ -84,15 +84,13 @@ def my_main(dataset_dir, result_dir, percentage_f):
   formattedRDD.persist()
   
   #6. Calcualte the average number of reviews per cuisine
-  #6.1. Need to put the number of reviews into a seprate RDD. Reduce has issues with tuples
-  reviewRDD = formattedRDD.map(lambda x: x[1][0])
-  #6.2. Count total number of reviews
-  totalNumReviews= reviewRDD.reduce(lambda x,y:x+y)
-  #6.3. Count total number of cuisines 
+  #6.1. Count total number of reviews
+  totalNumReviews  = rawDataRDD.count()
+  #6.2. Count total number of cuisines 
   totalNumCuisines = formattedRDD.count()
-  #6.4. Devide to get average number of reviews per cuisine 
+  #6.3. Devide to get average number of reviews per cuisine 
   averageReviewPerCuisine = totalNumReviews/totalNumCuisines
-  
+ 
   #7. Filter out non-valid cuisines
   filteredRDD = formattedRDD.filter(lambda line: my_filter(line,averageReviewPerCuisine,percentage_f))
   

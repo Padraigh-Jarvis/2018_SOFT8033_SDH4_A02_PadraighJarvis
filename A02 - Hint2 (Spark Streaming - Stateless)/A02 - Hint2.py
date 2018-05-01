@@ -123,7 +123,6 @@ def my_model(ssc, monitoring_dir, result_dir, percentage_f):
   
   #7.4 We then format the tuples to suit our needs
   formattedTotalStream = joinedCuisineDataTotalStream.map(lambda x: (x[1][1][0], (x[1][1][1], x[1][1][2], x[1][1][3], x[1][0][0], x[1][0][1])))
-  
   #8. We then filter out any cuisine that does not match our filter parameters
   filteredStream = formattedTotalStream.filter(lambda line: my_filter(line, percentage_f))
   
@@ -136,10 +135,10 @@ def my_model(ssc, monitoring_dir, result_dir, percentage_f):
   sortedStream.cache()
   #9. Save the results to a text file NOT WORKING
   sortedStream.saveAsTextFiles(result_dir)
+
   # Debug code
-  #totalReviewMapStream.pprint()
   sortedStream.pprint()
-  #print(averageReviewPerCuisine)
+
   
   pass
 
@@ -299,7 +298,7 @@ if __name__ == '__main__':
     dataset_micro_batches = 16
 
     # 3. We specify the time interval each of our micro-batches (files) appear for its processing.
-    time_step_interval = 3
+    time_step_interval = 6
 
     # 4. We specify the maximum amount of micro-batches that we want to allow before considering data
     # old and dumping it.
